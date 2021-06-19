@@ -1,6 +1,8 @@
+const notifier = require("node-notifier");
 const chalk = require("chalk");
 const { Console } = require("console");
 const fetch = require("node-fetch");
+const { stringify } = require("querystring");
 
 function getArgs() {
   const args = {};
@@ -159,28 +161,6 @@ function processGap(arr) {
   return arr.map((elem) => fillMissingGap(elem, results[0]));
 }
 
-// function checkAvailability(url, searchKey) {
-//   return fetch(url)
-//     .then((response) => response.text())
-//     .then((output) =>
-//       output.toLowerCase().includes(searchKey)
-//         ? checkPageDetails(output, searchKey, url)
-//         : ""
-//     );
-// }
-
-// function checkAvailability(url, searchKeys) {
-//   return fetch(url)
-//     .then((response) => response.text())
-//     .then((output) =>
-//       searchKeys.forEach((searchKey) =>
-//         output.toLowerCase().includes(searchKey)
-//           ? checkPageDetails(output, searchKey, url)
-//           : ""
-//       )
-//     );
-// }
-
 function checkAvailability(urls, pageIndex, searchKeys) {
   return urls.forEach((url) => {
     {
@@ -211,8 +191,14 @@ function printSearchResults() {
     "================================================================================================================================================================"
   );
   console.log(chalk.blue("Result Summary:"));
-
   console.log(uniqueResults);
+  if (uniqueResults.size != 0) {
+    alertMsg = {};
+    alertMsg["title"] = "Attention";
+    alertMsg["message"] = [...uniqueResults].join(",");
+    notifier.notify(alertMsg);
+    console.log(alertMsg);
+  }
 }
 
 async function checkPageDetails(pageContent, searchKey, url) {
@@ -260,7 +246,6 @@ async function delayedLog(item) {
   // notice that we can await a function
   // that returns a promise
   await delay();
-  //   console.log("Check Next URL");
 }
 
 async function execute() {
@@ -269,21 +254,10 @@ async function execute() {
     i <= parseInt(startpage) + parseInt(checkNoOfPages);
     i++
   ) {
-    //   pagenav = urls;
-    //   pagenav = i == 0 ? pagenav : pagenav.concat("page/").concat(i);
-    //   console.log(pagenav);
     await delayedLog(checkAvailability(urls, i, searchWords));
   }
   printSearchResults();
 }
-
-// for (let i = 0; i <= checkNoOfPages; i++) {
-//   //   pagenav = urls;
-//   //   pagenav = i == 0 ? pagenav : pagenav.concat("page/").concat(i);
-//   //   console.log(pagenav);
-//   checkAvailability(urls, i, searchWords);
-//   console.log(uniqueResults);
-// }
 
 execute();
 

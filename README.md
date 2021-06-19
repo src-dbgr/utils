@@ -2,11 +2,12 @@
 
 ## Accepts certain params to adjust the behaviour
 
-## Install `chalk` and `node-fetch` to make it work
+## Install `chalk`, `node notifier`, and `node-fetch` to make it work
 
 ```
 npm install chalk
 npm install node-fetch
+npm install --save node-notifier
 ```
 
 ### Available Params

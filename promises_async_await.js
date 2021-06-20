@@ -15,9 +15,37 @@ function callBackHellTrigger() {
   }, 3000);
 }
 
-callBackHellTrigger();
+//callBackHellTrigger();
 
 // Promises
 // Goal ==> Avoid Callback Hell
 // Allows to write async Code in a synchronous fashion
 // In javascript a promise is an object that returns a value
+
+function resolve() {
+  console.log("resolved");
+}
+
+function reject() {
+  console.log("rejected");
+}
+
+const promise = new Promise((resolve, reject) => {});
+
+// async / await
+// async must be present
+// async always returns a promise
+// await waits until the promise is resolved or rejected
+
+const example = async () => {
+  return "Test";
+};
+
+async function waitingForAsyncToBeFinished() {
+  const pitter = await example();
+  console.log(pitter);
+  console.log("This will be printed after 3 seconds");
+  console.log("This will be printed last");
+}
+
+waitingForAsyncToBeFinished();

@@ -147,82 +147,96 @@ const endCharOffset = JSON.stringify(args).includes("offsetpos")
   : 100;
 
 const timeout = JSON.stringify(args).includes("timeout") ? args.timeout : 1500;
-let startpage = JSON.stringify(args).includes("startpage") ? args.startpage : 0;
+const startpage = JSON.stringify(args).includes("startpage")
+  ? args.startpage
+  : 0;
 
 async function fetchPage(url) {
   try {
     const res = await fetch(url);
-    return res.text();
+    const data = await res.text();
+    const uri = await url;
+    return [data, uri];
   } catch (e) {
     console.log(e);
   }
 }
 
 function printPages() {
-  console.log("printing data");
-  pageSet.forEach((element) => {
-    console.log(element);
-  });
+  console.log("RESULTS");
+  console.log(pageSet);
 }
 
-function parsePage(page, searchKeys, url) {
+async function parsePage(page, searchKeys, url) {
+  console.log("parsing url: " + url);
   searchKeys.forEach((searchKey) => {
     page = page.toLowerCase();
-    page.includes(searchKey) ? checkPageDetails(page, searchKey, url) : "";
+    if (page.includes(searchKey)) {
+      checkPageDetails(page, searchKey, url);
+    }
   });
+  return "done";
 }
 
 function checkPageDetails(pageContent, searchKey, url) {
   //   console.log(
   //     chalk.green("Found Something -- Key: " + searchKey + "  --  URL: " + url)
   //   );
-  finalString = "";
-  startIndex = pageContent.indexOf(searchKey) - startCharOffset;
-  stopIndex = startIndex + searchKey.length + endCharOffset;
-  extendedString = pageContent.substring(startIndex, stopIndex);
-  keyPrefix = extendedString.substring(0, startCharOffset);
-  keySuffix = extendedString.substring(
-    startCharOffset + searchKey.length,
-    endCharOffset
-  );
-  outputMessage =
-    "Found Content: " + keyPrefix + chalk.red(searchKey) + keySuffix;
-  finalString += outputMessage;
-  setLookup =
-    fillMissingGap(searchKey, maxSearchWordsLength) +
-    " : " +
-    fillMissingGap(url, maxURLLength) +
-    " : " +
-    extendedString.replace(/(\r\n|\n|\r)/gm, "");
-  if (!pageSet.has(setLookup)) {
-    console.log("");
-    console.log(
-      "----------------------------------------------------------------------------------"
+  try {
+    finalString = "";
+    startIndex = pageContent.indexOf(searchKey) - startCharOffset;
+    stopIndex = startIndex + searchKey.length + endCharOffset;
+    extendedString = pageContent.substring(startIndex, stopIndex);
+    keyPrefix = extendedString.substring(0, startCharOffset);
+    keySuffix = extendedString.substring(
+      startCharOffset + searchKey.length,
+      endCharOffset
     );
-    console.log(chalk.red(searchKey) + " is available on: " + chalk.blue(url));
-    console.log(outputMessage);
-    console.log(
-      "----------------------------------------------------------------------------------"
-    );
-    console.log("");
-    pageSet.add(setLookup);
+    outputMessage =
+      "Found Content: " + keyPrefix + chalk.red(searchKey) + keySuffix;
+    finalString += outputMessage;
+    setLookup =
+      fillMissingGap(searchKey, maxSearchWordsLength) +
+      " : " +
+      fillMissingGap(url, maxURLLength) +
+      " : " +
+      extendedString.replace(/(\r\n|\n|\r)/gm, "");
+    if (!pageSet.has(setLookup)) {
+      console.log("");
+      console.log(
+        "----------------------------------------------------------------------------------"
+      );
+      console.log(
+        chalk.red(searchKey) + " is available on: " + chalk.blue(url)
+      );
+      console.log(outputMessage);
+      console.log(
+        "----------------------------------------------------------------------------------"
+      );
+      console.log("");
+      pageSet.add(setLookup);
+    }
+    return "done";
+  } catch (e) {
+    console.log("error occured");
   }
 }
 
 function collectPages(urls, searchKeys) {
   urls.forEach((url) => {
     url = url.endsWith("/") ? url : url + "/";
-    for (let i = 0; i < checkNoOfPages; i++) {
+    limit = parseInt(startpage) + parseInt(checkNoOfPages);
+    for (let i = parseInt(startpage); i < limit; i++) {
       searchUrl = !(i === 0) ? url + suffix + i : url;
       (async function getWebContent() {
         console.log("Checking: " + searchUrl + " for Keys: " + searchKeys);
-        const page = await fetchPage(searchUrl); // still buggy
-        console.log(page);
+        const [page, requrl] = await fetchPage(searchUrl); // still buggy
+        // console.log(page);
+        // console.log(requrl);
         // TODO ==> Call processing fn
-        parsePage(page, searchKeys, searchUrl);
-        //   pageSet.add(page);
-        if (i === checkNoOfPages - 1) {
-          printPages();
+        const done = await parsePage(page, searchKeys, requrl);
+        if (i === checkNoOfPages - 1 && done === "done") {
+          setTimeout(printPages, 1000);
         }
       })();
     }

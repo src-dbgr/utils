@@ -1,268 +1,247 @@
-const notifier = require("node-notifier");
-const chalk = require("chalk");
-const { Console } = require("console");
-const fetch = require("node-fetch");
-const { stringify } = require("querystring");
+const notifier = require('node-notifier');
+const chalk = require('chalk');
+const fetch = require('node-fetch');
+const fs = require('fs').promises;
 
-function getArgs() {
-  const args = {};
-  process.argv.slice(2, process.argv.length).forEach((arg) => {
-    // long arg
-    if (arg.slice(0, 2) === "--") {
-      const longArg = arg.split("=");
-      const longArgFlag = longArg[0].slice(2, longArg[0].length);
-      const longArgValue = longArg.length > 1 ? longArg[1] : true;
-      args[longArgFlag] = longArgValue;
-    }
-    // flags
-    else if (arg[0] === "-") {
-      const flags = arg.slice(1, arg.length).split("");
-      flags.forEach((flag) => {
-        args[flag] = true;
+/**
+ * @typedef {Object} Config
+ * @property {string[]} defaultUrls - Default URLs to search
+ * @property {number} defaultPages - Default number of pages to search
+ * @property {number} defaultOffsetNeg - Default negative offset for search results
+ * @property {number} defaultOffsetPos - Default positive offset for search results
+ * @property {number} defaultTimeout - Default timeout for requests
+ * @property {number} defaultStartPage - Default starting page number
+ */
+
+/** @type {Config} */
+const config = {
+  defaultUrls: ["https://www.example.com/"],
+  defaultPages: 1,
+  defaultOffsetNeg: 20,
+  defaultOffsetPos: 100,
+  defaultTimeout: 1500,
+  defaultStartPage: 0
+};
+
+/**
+ * Parse command line arguments
+ * @returns {Object.<string, string|boolean>}
+ */
+const getArgs = () => {
+  return process.argv.slice(2).reduce((acc, arg) => {
+    if (arg.startsWith("--")) {
+      const [flag, value] = arg.slice(2).split("=");
+      acc[flag] = value || true;
+    } else if (arg.startsWith("-")) {
+      arg.slice(1).split("").forEach(flag => {
+        acc[flag] = true;
       });
     }
-  });
-  return args;
-}
+    return acc;
+  }, {});
+};
 
-const args = getArgs(process.argv);
+/**
+ * Display help information
+ */
+const displayHelp = () => {
+  console.log(chalk.blue("Usage:"));
+  console.log(`${chalk.blue("--search=alpha,beta,gamma")} Pass search arguments as csv ${chalk.red("*REQUIRED*")}`);
+  console.log(`${chalk.blue("--urls=https://www.example.com,https://www.another.com")} Pass URLs as csv ${chalk.green("*optional*")}`);
+  console.log(`${chalk.blue("--pages=5")} Number of pages to search ${chalk.green("*optional*")}`);
+  console.log(`${chalk.blue("--offsetneg=20")} Negative offset for search results ${chalk.green("*optional*")}`);
+  console.log(`${chalk.blue("--offsetpos=100")} Positive offset for search results ${chalk.green("*optional*")}`);
+  console.log(`${chalk.blue("--timeout=1500")} Timeout between requests in ms ${chalk.green("*optional*")}`);
+  console.log(`${chalk.blue("--startpage=0")} Starting page number ${chalk.green("*optional*")}`);
+};
 
-if (JSON.stringify(args).includes("help") || process.argv.length <= 2) {
-  console.log(
-    chalk.blue("--search=alpha,beta,gamma") +
-      "                            Pass search arguments as csv " +
-      chalk.red("*REQUIRED*")
-  );
-  console.log(
-    chalk.blue("--urls=https://www.google.com,https://www.online.com") +
-      " Pass search arguments as csv " +
-      chalk.green("*optional*") +
-      " default one address"
-  );
-  console.log(
-    chalk.blue("--pages=5                ") +
-      "                            Pass search arguments as single value " +
-      chalk.green("*optional*") +
-      " default value is 1"
-  );
-  console.log(
-    chalk.blue("--offsetneg=20           ") +
-      "                            Pass search arguments as single value " +
-      chalk.green("*optional*") +
-      " default value is 20"
-  );
-  console.log(
-    chalk.blue("--offsetpos=100          ") +
-      "                            Pass search arguments as single value " +
-      chalk.green("*optional*") +
-      " default value is 100"
-  );
-  console.log(
-    chalk.blue("--timeout=1500           ") +
-      "                            Pass search arguments as single value " +
-      chalk.green("*optional*") +
-      " default value is 1500"
-  );
-  console.log(
-    chalk.blue("--startpage=0           ") +
-      "                             Pass search arguments as single value " +
-      chalk.green("*optional*") +
-      " default value is 0"
-  );
-  process.exit(1);
-}
-
-// Pass search arguments as csv: => --search=alpha,beta,gamma
-// Pass no of pages to search as argument: => --pages=5 ==> No params takes 1 as default
-// Pass start offset to search as argument: => --offsetneg=5 ==> No params takes 20 as default
-// Pass end offset to search as argument: => --offsetneg=100 ==> No params takes 100 as default
-let searchWords;
-
-if (JSON.stringify(args).includes("search")) {
-  if (args.search.includes(",")) {
-    searchWords = args.search.split(",");
-  } else {
-    searchWords = [args.search];
+/**
+ * Validate and process command line arguments
+ * @param {Object.<string, string|boolean>} args - Parsed command line arguments
+ * @returns {Object} Processed arguments
+ * @throws {Error} If required arguments are missing
+ */
+const validateArgs = (args) => {
+  if (!args.search) {
+    throw new Error("Search argument is required. Use --search=keyword1,keyword2");
   }
-}
+  return {
+    searchWords: args.search.split(","),
+    urls: args.urls ? args.urls.split(",") : config.defaultUrls,
+    pages: parseInt(args.pages) || config.defaultPages,
+    offsetNeg: parseInt(args.offsetneg) || config.defaultOffsetNeg,
+    offsetPos: parseInt(args.offsetpos) || config.defaultOffsetPos,
+    timeout: parseInt(args.timeout) || config.defaultTimeout,
+    startPage: parseInt(args.startpage) || config.defaultStartPage
+  };
+};
 
-if (searchWords[0].length <= 1) {
-  console.log(chalk.red("Execution Stopped"));
-  console.log(
-    "Provide " + chalk.blue("--search=alpha,beta,gamma") + " argument"
-  );
-  process.exit(1);
-}
+/**
+ * Find the maximum length in an array of strings
+ * @param {string[]} arr - Array of strings
+ * @returns {number} Maximum length plus padding
+ */
+const findMax = (arr) => Math.max(...arr.map(el => el.length)) + 7;
 
-let urls = ["https://www.google.com/"];
-if (JSON.stringify(args).includes("urls")) {
-  if (args.urls.includes(",")) {
-    urls = args.urls.split(",");
-  } else {
-    urls = [args.urls];
+/**
+ * Pad a string to a specified length
+ * @param {string} element - String to pad
+ * @param {number} maxLength - Length to pad to
+ * @returns {string} Padded string
+ */
+const fillMissingGap = (element, maxLength) => element.padEnd(maxLength);
+
+/**
+ * Fetch with timeout
+ * @param {string} url - URL to fetch
+ * @param {number} timeout - Timeout in milliseconds
+ * @returns {Promise<Response>} Fetch response
+ */
+const fetchWithTimeout = async (url, timeout) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
   }
-}
+};
 
-var uniqueResults = new Set();
-const checkNoOfPages = JSON.stringify(args).includes("pages") ? args.pages : 0;
-const startCharOffset = JSON.stringify(args).includes("offsetneg")
-  ? args.offsetneg
-  : 20;
-const endCharOffset = JSON.stringify(args).includes("offsetpos")
-  ? args.offsetpos
-  : 100;
-
-const timeout = JSON.stringify(args).includes("timeout") ? args.timeout : 1500;
-let startpage = JSON.stringify(args).includes("startpage") ? args.startpage : 0;
-
-(function startScriptSummary() {
-  console.log("Search for Keywords:            " + chalk.green(searchWords));
-  console.log("Search through URLs:            " + chalk.green(urls));
-  console.log("Search pages:                   " + chalk.green(checkNoOfPages));
-  console.log(
-    "Search with negative offset of: " + chalk.green(startCharOffset)
-  );
-  console.log("Search with positive offset of: " + chalk.green(endCharOffset));
-  console.log("Search with timeout of:         " + chalk.green(timeout));
-  console.log("Search with startpage of:       " + chalk.green(startpage));
-})();
-
-let maxSearchWordsLength = 0;
-let indexSearchWordsLength = 0;
-let maxURLLength = 0;
-let indexURLLength = 0;
-
-[maxURLLength, indexURLLength] = findMax(urls);
-[maxSearchWordsLength, indexSearchWordsLength] = findMax(searchWords);
-
-function findMax(arr) {
-  maxLength = 0;
-  maxLengthIndex = 0;
-  arr.forEach((element, i) => {
-    if (element.length > maxLength) {
-      maxLength = element.length;
-      maxLengthIndex = i;
-    }
-  });
-  return [maxLength + 7, maxLengthIndex];
-}
-
-function fillMissingGap(element, maxLength) {
-  delta = maxLength - element.length;
-  for (let i = 0; i < delta; i++) {
-    element += " ";
-  }
-  return element;
-}
-
-function processGap(arr) {
-  // provides an adjusted array
-  const results = findMax(arr);
-  return arr.map((elem) => fillMissingGap(elem, results[0]));
-}
-
-function checkAvailability(urls, pageIndex, searchKeys) {
-  return urls.forEach((url) => {
-    {
-      url = url.endsWith("/") ? url : url + "/";
-      url = pageIndex == 0 ? url : url.concat("page/").concat(pageIndex);
-      console.log("Checking: " + url + " for Keys: " + searchKeys);
-    }
-    fetch(url)
-      .then((response) => response.text())
-      .then((output) =>
-        searchKeys.forEach((searchKey) =>
-          output.toLowerCase().includes(searchKey)
-            ? checkPageDetails(output, searchKey, url)
-            : ""
-        )
-      );
-  });
-}
-
-function printSearchResults() {
-  console.log(
-    "================================================================================================================================================================"
-  );
-  console.log(
-    "------------------------------------------------------------------------SEARCH-RESULT---------------------------------------------------------------------------"
-  );
-  console.log(
-    "================================================================================================================================================================"
-  );
-  console.log(chalk.blue("Result Summary:"));
-  console.log(uniqueResults);
-  if (uniqueResults.size != 0) {
-    alertMsg = {};
-    alertMsg["title"] = "Attention";
-    alertMsg["message"] = [...uniqueResults].join(",");
-    notifier.notify(alertMsg);
-    console.log(alertMsg);
-  }
-}
-
-async function checkPageDetails(pageContent, searchKey, url) {
-  console.log(
-    chalk.green("Found Something -- Key: " + searchKey + "  --  URL: " + url)
-  );
-  finalString = "";
-  startIndex = pageContent.indexOf(searchKey) - startCharOffset;
-  stopIndex = startIndex + searchKey.length + endCharOffset;
-  extendedString = pageContent.substring(startIndex, stopIndex);
-  keyPrefix = extendedString.substring(0, startCharOffset);
-  keySuffix = extendedString.substring(
-    startCharOffset + searchKey.length,
-    endCharOffset
-  );
-  outputMessage =
-    "Found Content: " + keyPrefix + chalk.red(searchKey) + keySuffix;
-  finalString += outputMessage;
-  setLookup =
-    fillMissingGap(searchKey, maxSearchWordsLength) +
-    " : " +
-    fillMissingGap(url, maxURLLength) +
-    " : " +
-    extendedString.replace(/(\r\n|\n|\r)/gm, "");
+/**
+ * Check page details for a search key
+ * @param {string} pageContent - Page content
+ * @param {string} searchKey - Search key
+ * @param {string} url - URL of the page
+ * @param {number} offsetNeg - Negative offset
+ * @param {number} offsetPos - Positive offset
+ * @param {Set<string>} uniqueResults - Set of unique results
+ * @param {number} maxSearchWordsLength - Maximum length of search words
+ * @param {number} maxURLLength - Maximum length of URLs
+ */
+const checkPageDetails = (pageContent, searchKey, url, offsetNeg, offsetPos, uniqueResults, maxSearchWordsLength, maxURLLength) => {
+  const lowercaseContent = pageContent.toLowerCase();
+  const lowercaseSearchKey = searchKey.toLowerCase();
+  const startIndex = Math.max(0, lowercaseContent.indexOf(lowercaseSearchKey) - offsetNeg);
+  const stopIndex = Math.min(pageContent.length, startIndex + searchKey.length + offsetPos);
+  const extendedString = pageContent.substring(startIndex, stopIndex);
+  
+  const setLookup = `${searchKey.padEnd(maxSearchWordsLength)} : ${url.padEnd(maxURLLength)} : ${extendedString.replace(/(\r\n|\n|\r)/gm, "")}`;
+  
   if (!uniqueResults.has(setLookup)) {
-    console.log("");
-    console.log(
-      "----------------------------------------------------------------------------------"
-    );
-    console.log(chalk.red(searchKey) + " is available on: " + chalk.blue(url));
-    console.log(outputMessage);
-    console.log(
-      "----------------------------------------------------------------------------------"
-    );
-    console.log("");
+    console.log("\n" + "-".repeat(80));
+    console.log(`${chalk.red(searchKey)} is available on: ${chalk.blue(url)}`);
+    console.log(`Found Content: ${extendedString.slice(0, offsetNeg)}${chalk.red(searchKey)}${extendedString.slice(offsetNeg + searchKey.length)}`);
+    console.log("-".repeat(80) + "\n");
     uniqueResults.add(setLookup);
   }
-}
+};
 
-function delay() {
-  return new Promise((resolve) => setTimeout(resolve, timeout));
-}
-
-async function delayedLog(item) {
-  // notice that we can await a function
-  // that returns a promise
-  await delay();
-}
-
-async function execute() {
-  for (
-    i = parseInt(startpage);
-    i <= parseInt(startpage) + parseInt(checkNoOfPages);
-    i++
-  ) {
-    await delayedLog(checkAvailability(urls, i, searchWords));
+/**
+ * Check availability of search keys on a page
+ * @param {string[]} urls - URLs to check
+ * @param {number} pageIndex - Page index
+ * @param {string[]} searchKeys - Search keys
+ * @param {number} offsetNeg - Negative offset
+ * @param {number} offsetPos - Positive offset
+ * @param {number} timeout - Timeout for requests
+ * @param {Set<string>} uniqueResults - Set of unique results
+ * @param {number} maxSearchWordsLength - Maximum length of search words
+ * @param {number} maxURLLength - Maximum length of URLs
+ */
+const checkAvailability = async (urls, pageIndex, searchKeys, offsetNeg, offsetPos, timeout, uniqueResults, maxSearchWordsLength, maxURLLength) => {
+  for (const url of urls) {
+    try {
+      const fullUrl = `${url.endsWith('/') ? url : url + '/'}${pageIndex === 0 ? '' : `page/${pageIndex}`}`;
+      console.log(`Checking: ${fullUrl} for Keys: ${searchKeys}`);
+      
+      const response = await fetchWithTimeout(fullUrl, timeout);
+      const output = await response.text();
+      
+      for (const searchKey of searchKeys) {
+        if (output.toLowerCase().includes(searchKey.toLowerCase())) {
+          checkPageDetails(output, searchKey, fullUrl, offsetNeg, offsetPos, uniqueResults, maxSearchWordsLength, maxURLLength);
+        }
+      }
+    } catch (error) {
+      console.error(`Error checking ${url}: ${error.message}`);
+    }
+    
+    // Add a delay to avoid overwhelming the server
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  printSearchResults();
-}
+};
 
-execute();
+/**
+ * Print search results
+ * @param {Set<string>} uniqueResults - Set of unique results
+ */
+const printSearchResults = (uniqueResults) => {
+  console.log("=".repeat(120));
+  console.log("-".repeat(50) + "SEARCH-RESULT" + "-".repeat(50));
+  console.log("=".repeat(120));
+  console.log(chalk.blue("Result Summary:"));
+  console.log([...uniqueResults]);
+  if (uniqueResults.size !== 0) {
+    notifier.notify({
+      title: "Attention",
+      message: [...uniqueResults].join(",")
+    });
+  }
+};
 
-process.on("SIGINT", function () {
+/**
+ * Main execution function
+ * @param {Object} args - Processed command line arguments
+ * @param {Set<string>} uniqueResults - Set of unique results
+ * @param {number} maxSearchWordsLength - Maximum length of search words
+ * @param {number} maxURLLength - Maximum length of URLs
+ */
+const execute = async (args, uniqueResults, maxSearchWordsLength, maxURLLength) => {
+  const { searchWords, urls, pages, offsetNeg, offsetPos, timeout, startPage } = args;
+
+  console.log("Search for Keywords:            " + chalk.green(searchWords));
+  console.log("Search through URLs:            " + chalk.green(urls));
+  console.log("Search pages:                   " + chalk.green(pages));
+  console.log("Search with negative offset of: " + chalk.green(offsetNeg));
+  console.log("Search with positive offset of: " + chalk.green(offsetPos));
+  console.log("Search with timeout of:         " + chalk.green(timeout));
+  console.log("Search with startpage of:       " + chalk.green(startPage));
+
+  for (let i = startPage; i <= startPage + pages; i++) {
+    await checkAvailability(urls, i, searchWords, offsetNeg, offsetPos, timeout, uniqueResults, maxSearchWordsLength, maxURLLength);
+  }
+  printSearchResults(uniqueResults);
+};
+
+const main = async () => {
+  try {
+    const args = getArgs();
+    
+    if (args.help || process.argv.length <= 2) {
+      displayHelp();
+      process.exit(0);
+    }
+
+    const validatedArgs = validateArgs(args);
+    const uniqueResults = new Set();
+    const maxSearchWordsLength = findMax(validatedArgs.searchWords);
+    const maxURLLength = findMax(validatedArgs.urls);
+
+    await execute(validatedArgs, uniqueResults, maxSearchWordsLength, maxURLLength);
+  } catch (error) {
+    console.error(chalk.red("Error:"), error.message);
+    process.exit(1);
+  }
+};
+
+main();
+
+// Handle SIGINT (Ctrl+C)
+process.on("SIGINT", () => {
   console.log("\nGracefully shutting down from SIGINT (Ctrl+C)");
-  printSearchResults();
+  printSearchResults(new Set());
   process.exit();
 });

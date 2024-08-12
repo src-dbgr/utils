@@ -1,7 +1,7 @@
-const notifier = require('node-notifier');
-const chalk = require('chalk');
-const fetch = require('node-fetch');
-const fs = require('fs').promises;
+import chalk from "chalk";
+import notifier from "node-notifier";
+import fetch from "node-fetch";
+import { promises as fs } from "fs";
 
 /**
  * @typedef {Object} Config
@@ -11,6 +11,7 @@ const fs = require('fs').promises;
  * @property {number} defaultOffsetPos - Default positive offset for search results
  * @property {number} defaultTimeout - Default timeout for requests
  * @property {number} defaultStartPage - Default starting page number
+ * @property {number} concurrencyLimit - Maximum number of concurrent requests
  */
 
 /** @type {Config} */
@@ -20,7 +21,8 @@ const config = {
   defaultOffsetNeg: 20,
   defaultOffsetPos: 100,
   defaultTimeout: 1500,
-  defaultStartPage: 0
+  defaultStartPage: 0,
+  concurrencyLimit: 5,
 };
 
 /**
@@ -33,9 +35,12 @@ const getArgs = () => {
       const [flag, value] = arg.slice(2).split("=");
       acc[flag] = value || true;
     } else if (arg.startsWith("-")) {
-      arg.slice(1).split("").forEach(flag => {
-        acc[flag] = true;
-      });
+      arg
+        .slice(1)
+        .split("")
+        .forEach((flag) => {
+          acc[flag] = true;
+        });
     }
     return acc;
   }, {});
@@ -46,13 +51,41 @@ const getArgs = () => {
  */
 const displayHelp = () => {
   console.log(chalk.blue("Usage:"));
-  console.log(`${chalk.blue("--search=alpha,beta,gamma")} Pass search arguments as csv ${chalk.red("*REQUIRED*")}`);
-  console.log(`${chalk.blue("--urls=https://www.example.com,https://www.another.com")} Pass URLs as csv ${chalk.green("*optional*")}`);
-  console.log(`${chalk.blue("--pages=5")} Number of pages to search ${chalk.green("*optional*")}`);
-  console.log(`${chalk.blue("--offsetneg=20")} Negative offset for search results ${chalk.green("*optional*")}`);
-  console.log(`${chalk.blue("--offsetpos=100")} Positive offset for search results ${chalk.green("*optional*")}`);
-  console.log(`${chalk.blue("--timeout=1500")} Timeout between requests in ms ${chalk.green("*optional*")}`);
-  console.log(`${chalk.blue("--startpage=0")} Starting page number ${chalk.green("*optional*")}`);
+  console.log(
+    `${chalk.blue(
+      "--search=alpha,beta,gamma"
+    )} Pass search arguments as csv ${chalk.red("*REQUIRED*")}`
+  );
+  console.log(
+    `${chalk.blue(
+      "--urls=https://www.example.com,https://www.another.com"
+    )} Pass URLs as csv ${chalk.green("*optional*")}`
+  );
+  console.log(
+    `${chalk.blue("--pages=5")} Number of pages to search ${chalk.green(
+      "*optional*"
+    )}`
+  );
+  console.log(
+    `${chalk.blue(
+      "--offsetneg=20"
+    )} Negative offset for search results ${chalk.green("*optional*")}`
+  );
+  console.log(
+    `${chalk.blue(
+      "--offsetpos=100"
+    )} Positive offset for search results ${chalk.green("*optional*")}`
+  );
+  console.log(
+    `${chalk.blue(
+      "--timeout=1500"
+    )} Timeout between requests in ms ${chalk.green("*optional*")}`
+  );
+  console.log(
+    `${chalk.blue("--startpage=0")} Starting page number ${chalk.green(
+      "*optional*"
+    )}`
+  );
 };
 
 /**
@@ -63,7 +96,9 @@ const displayHelp = () => {
  */
 const validateArgs = (args) => {
   if (!args.search) {
-    throw new Error("Search argument is required. Use --search=keyword1,keyword2");
+    throw new Error(
+      "Search argument is required. Use --search=keyword1,keyword2"
+    );
   }
   return {
     searchWords: args.search.split(","),
@@ -72,7 +107,7 @@ const validateArgs = (args) => {
     offsetNeg: parseInt(args.offsetneg) || config.defaultOffsetNeg,
     offsetPos: parseInt(args.offsetpos) || config.defaultOffsetPos,
     timeout: parseInt(args.timeout) || config.defaultTimeout,
-    startPage: parseInt(args.startpage) || config.defaultStartPage
+    startPage: parseInt(args.startpage) || config.defaultStartPage,
   };
 };
 
@@ -81,7 +116,7 @@ const validateArgs = (args) => {
  * @param {string[]} arr - Array of strings
  * @returns {number} Maximum length plus padding
  */
-const findMax = (arr) => Math.max(...arr.map(el => el.length)) + 7;
+const findMax = (arr) => Math.max(...arr.map((el) => el.length)) + 7;
 
 /**
  * Pad a string to a specified length
@@ -121,26 +156,47 @@ const fetchWithTimeout = async (url, timeout) => {
  * @param {number} maxSearchWordsLength - Maximum length of search words
  * @param {number} maxURLLength - Maximum length of URLs
  */
-const checkPageDetails = (pageContent, searchKey, url, offsetNeg, offsetPos, uniqueResults, maxSearchWordsLength, maxURLLength) => {
+const checkPageDetails = (
+  pageContent,
+  searchKey,
+  url,
+  offsetNeg,
+  offsetPos,
+  uniqueResults,
+  maxSearchWordsLength,
+  maxURLLength
+) => {
   const lowercaseContent = pageContent.toLowerCase();
   const lowercaseSearchKey = searchKey.toLowerCase();
-  const startIndex = Math.max(0, lowercaseContent.indexOf(lowercaseSearchKey) - offsetNeg);
-  const stopIndex = Math.min(pageContent.length, startIndex + searchKey.length + offsetPos);
+  const startIndex = Math.max(
+    0,
+    lowercaseContent.indexOf(lowercaseSearchKey) - offsetNeg
+  );
+  const stopIndex = Math.min(
+    pageContent.length,
+    startIndex + searchKey.length + offsetPos
+  );
   const extendedString = pageContent.substring(startIndex, stopIndex);
-  
-  const setLookup = `${searchKey.padEnd(maxSearchWordsLength)} : ${url.padEnd(maxURLLength)} : ${extendedString.replace(/(\r\n|\n|\r)/gm, "")}`;
-  
+
+  const setLookup = `${searchKey.padEnd(maxSearchWordsLength)} : ${url.padEnd(
+    maxURLLength
+  )} : ${extendedString.replace(/(\r\n|\n|\r)/gm, "")}`;
+
   if (!uniqueResults.has(setLookup)) {
     console.log("\n" + "-".repeat(80));
     console.log(`${chalk.red(searchKey)} is available on: ${chalk.blue(url)}`);
-    console.log(`Found Content: ${extendedString.slice(0, offsetNeg)}${chalk.red(searchKey)}${extendedString.slice(offsetNeg + searchKey.length)}`);
+    console.log(
+      `Found Content: ${extendedString.slice(0, offsetNeg)}${chalk.red(
+        searchKey
+      )}${extendedString.slice(offsetNeg + searchKey.length)}`
+    );
     console.log("-".repeat(80) + "\n");
     uniqueResults.add(setLookup);
   }
 };
 
 /**
- * Check availability of search keys on a page
+ * Process a batch of URLs concurrently
  * @param {string[]} urls - URLs to check
  * @param {number} pageIndex - Page index
  * @param {string[]} searchKeys - Search keys
@@ -150,27 +206,96 @@ const checkPageDetails = (pageContent, searchKey, url, offsetNeg, offsetPos, uni
  * @param {Set<string>} uniqueResults - Set of unique results
  * @param {number} maxSearchWordsLength - Maximum length of search words
  * @param {number} maxURLLength - Maximum length of URLs
+ * @returns {Promise<void>}
  */
-const checkAvailability = async (urls, pageIndex, searchKeys, offsetNeg, offsetPos, timeout, uniqueResults, maxSearchWordsLength, maxURLLength) => {
-  for (const url of urls) {
+const processBatch = async (
+  urls,
+  pageIndex,
+  searchKeys,
+  offsetNeg,
+  offsetPos,
+  timeout,
+  uniqueResults,
+  maxSearchWordsLength,
+  maxURLLength
+) => {
+  const fetchPromises = urls.map(async (url) => {
     try {
-      const fullUrl = `${url.endsWith('/') ? url : url + '/'}${pageIndex === 0 ? '' : `page/${pageIndex}`}`;
+      const fullUrl = `${url.endsWith("/") ? url : url + "/"}${
+        pageIndex === 0 ? "" : `page/${pageIndex}`
+      }`;
       console.log(`Checking: ${fullUrl} for Keys: ${searchKeys}`);
-      
+
       const response = await fetchWithTimeout(fullUrl, timeout);
       const output = await response.text();
-      
+
       for (const searchKey of searchKeys) {
         if (output.toLowerCase().includes(searchKey.toLowerCase())) {
-          checkPageDetails(output, searchKey, fullUrl, offsetNeg, offsetPos, uniqueResults, maxSearchWordsLength, maxURLLength);
+          checkPageDetails(
+            output,
+            searchKey,
+            fullUrl,
+            offsetNeg,
+            offsetPos,
+            uniqueResults,
+            maxSearchWordsLength,
+            maxURLLength
+          );
         }
       }
     } catch (error) {
       console.error(`Error checking ${url}: ${error.message}`);
     }
-    
-    // Add a delay to avoid overwhelming the server
-    await new Promise(resolve => setTimeout(resolve, 1000));
+  });
+
+  await Promise.all(fetchPromises);
+};
+
+/**
+ * Check availability of search keys on a page with concurrency control
+ * @param {string[]} urls - URLs to check
+ * @param {number} pageIndex - Page index
+ * @param {string[]} searchKeys - Search keys
+ * @param {number} offsetNeg - Negative offset
+ * @param {number} offsetPos - Positive offset
+ * @param {number} timeout - Timeout for requests
+ * @param {Set<string>} uniqueResults - Set of unique results
+ * @param {number} maxSearchWordsLength - Maximum length of search words
+ * @param {number} maxURLLength - Maximum length of URLs
+ * @param {number} concurrencyLimit - Maximum number of concurrent requests
+ */
+const checkAvailability = async (
+  urls,
+  pageIndex,
+  searchKeys,
+  offsetNeg,
+  offsetPos,
+  timeout,
+  uniqueResults,
+  maxSearchWordsLength,
+  maxURLLength,
+  concurrencyLimit
+) => {
+  const batchedUrls = [];
+  for (let i = 0; i < urls.length; i += concurrencyLimit) {
+    batchedUrls.push(urls.slice(i, i + concurrencyLimit));
+  }
+
+  for (const batch of batchedUrls) {
+    await processBatch(
+      batch,
+      pageIndex,
+      searchKeys,
+      offsetNeg,
+      offsetPos,
+      timeout,
+      uniqueResults,
+      maxSearchWordsLength,
+      maxURLLength
+    );
+
+    // Add a delay between batches to avoid overwhelming the server
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 };
 
@@ -187,7 +312,7 @@ const printSearchResults = (uniqueResults) => {
   if (uniqueResults.size !== 0) {
     notifier.notify({
       title: "Attention",
-      message: [...uniqueResults].join(",")
+      message: [...uniqueResults].join(","),
     });
   }
 };
@@ -199,8 +324,14 @@ const printSearchResults = (uniqueResults) => {
  * @param {number} maxSearchWordsLength - Maximum length of search words
  * @param {number} maxURLLength - Maximum length of URLs
  */
-const execute = async (args, uniqueResults, maxSearchWordsLength, maxURLLength) => {
-  const { searchWords, urls, pages, offsetNeg, offsetPos, timeout, startPage } = args;
+const execute = async (
+  args,
+  uniqueResults,
+  maxSearchWordsLength,
+  maxURLLength
+) => {
+  const { searchWords, urls, pages, offsetNeg, offsetPos, timeout, startPage } =
+    args;
 
   console.log("Search for Keywords:            " + chalk.green(searchWords));
   console.log("Search through URLs:            " + chalk.green(urls));
@@ -211,7 +342,18 @@ const execute = async (args, uniqueResults, maxSearchWordsLength, maxURLLength) 
   console.log("Search with startpage of:       " + chalk.green(startPage));
 
   for (let i = startPage; i <= startPage + pages; i++) {
-    await checkAvailability(urls, i, searchWords, offsetNeg, offsetPos, timeout, uniqueResults, maxSearchWordsLength, maxURLLength);
+    await checkAvailability(
+      urls,
+      i,
+      searchWords,
+      offsetNeg,
+      offsetPos,
+      timeout,
+      uniqueResults,
+      maxSearchWordsLength,
+      maxURLLength,
+      config.concurrencyLimit
+    );
   }
   printSearchResults(uniqueResults);
 };
@@ -219,7 +361,7 @@ const execute = async (args, uniqueResults, maxSearchWordsLength, maxURLLength) 
 const main = async () => {
   try {
     const args = getArgs();
-    
+
     if (args.help || process.argv.length <= 2) {
       displayHelp();
       process.exit(0);
@@ -230,14 +372,17 @@ const main = async () => {
     const maxSearchWordsLength = findMax(validatedArgs.searchWords);
     const maxURLLength = findMax(validatedArgs.urls);
 
-    await execute(validatedArgs, uniqueResults, maxSearchWordsLength, maxURLLength);
+    await execute(
+      validatedArgs,
+      uniqueResults,
+      maxSearchWordsLength,
+      maxURLLength
+    );
   } catch (error) {
     console.error(chalk.red("Error:"), error.message);
     process.exit(1);
   }
 };
-
-main();
 
 // Handle SIGINT (Ctrl+C)
 process.on("SIGINT", () => {
@@ -245,3 +390,5 @@ process.on("SIGINT", () => {
   printSearchResults(new Set());
   process.exit();
 });
+
+main();
